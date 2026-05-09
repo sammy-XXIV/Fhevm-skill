@@ -100,3 +100,10 @@ Exit code 1 if errors found — integrates with CI.
 ## Built from production
 
 Every anti-pattern in this skill caused a real bug during development of a confidential lending protocol on Zama FHEVM Sepolia. This is not a docs summary — it is a record of what actually breaks in production.
+
+## Live Demos
+
+Built entirely by AI agents using this SKILL.md:
+
+- [Confidential Voting](https://sammy-xxiv.github.io/Confidential-voting/) — encrypted votes, FHE tally
+- [Confidential Auction](https://sammy-xxiv.github.io/confidential-auction/) — encrypted bids, FHE winner selection
