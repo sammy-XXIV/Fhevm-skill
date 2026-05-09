@@ -1748,3 +1748,392 @@ await cweth.wrap(userAddress, ethers.parseUnits("1", 18));
 ```
 
 
+---
+
+## 35. Project Bootstrap — Full Hardhat Setup
+
+When starting a new FHEVM project from scratch, use this exact setup. Copy these files into the project root before writing any contracts.
+
+### package.json
+
+```json
+{
+  "name": "fhevm-project",
+  "version": "1.0.0",
+  "scripts": {
+    "compile": "hardhat compile",
+    "test": "hardhat test",
+    "deploy:sepolia": "hardhat run deploy/deploy.ts --network sepolia",
+    "clean": "hardhat clean"
+  },
+  "devDependencies": {
+    "@fhevm/hardhat-plugin": "^0.1.0",
+    "@nomicfoundation/hardhat-ethers": "^3.0.0",
+    "@nomicfoundation/hardhat-verify": "^2.0.0",
+    "@types/node": "^20.0.0",
+    "hardhat": "^2.22.0",
+    "ts-node": "^10.9.0",
+    "typescript": "^5.0.0"
+  },
+  "dependencies": {
+    "@fhevm/solidity": "^0.1.0",
+    "@openzeppelin/confidential-contracts": "^0.1.0",
+    "@openzeppelin/contracts": "^5.0.0",
+    "ethers": "^6.7.0"
+  }
+}
+```
+
+### hardhat.config.ts
+
+```typescript
+import "@fhevm/hardhat-plugin";
+import "@nomicfoundation/hardhat-ethers";
+import "@nomicfoundation/hardhat-verify";
+import type { HardhatUserConfig } from "hardhat/config";
+import * as dotenv from "dotenv";
+dotenv.config();
+
+const PRIVATE_KEY = process.env.PRIVATE_KEY ?? "";
+const SEPOLIA_RPC  = process.env.SEPOLIA_RPC_URL
+  ?? "https://ethereum-sepolia-rpc.publicnode.com";
+
+const config: HardhatUserConfig = {
+  defaultNetwork: "hardhat",
+  networks: {
+    hardhat: {},
+    sepolia: {
+      accounts: PRIVATE_KEY ? [PRIVATE_KEY] : [],
+      chainId: 11155111,
+      url: SEPOLIA_RPC,
+    },
+  },
+  solidity: {
+    version: "0.8.24",
+    settings: {
+      optimizer: { enabled: true, runs: 800 },
+      evmVersion: "cancun",
+    },
+  },
+};
+
+export default config;
+```
+
+### tsconfig.json
+
+```json
+{
+  "compilerOptions": {
+    "target": "ES2020",
+    "module": "commonjs",
+    "esModuleInterop": true,
+    "strict": true,
+    "outDir": "dist"
+  },
+  "include": ["**/*.ts"],
+  "exclude": ["node_modules", "dist"]
+}
+```
+
+### .env.example
+
+```bash
+PRIVATE_KEY=your_private_key_here
+SEPOLIA_RPC_URL=https://ethereum-sepolia-rpc.publicnode.com
+```
+
+### Setup Commands
+
+```bash
+# 1. Install dependencies
+npm install
+
+# 2. Copy env file
+cp .env.example .env
+# Add your PRIVATE_KEY to .env
+
+# 3. Compile for Sepolia — always clean first
+npx hardhat clean
+npx hardhat compile --network sepolia
+
+# 4. Run tests locally
+npx hardhat test
+
+# 5. Deploy to Sepolia
+npx hardhat run deploy/deploy.ts --network sepolia
+```
+
+### Deploy Script Template
+
+```typescript
+// deploy/deploy.ts
+import { ethers } from "hardhat";
+
+async function main() {
+  const [deployer] = await ethers.getSigners();
+  console.log("Deploying with:", deployer.address);
+  console.log("Balance:", ethers.formatEther(
+    await deployer.provider.getBalance(deployer.address)
+  ), "ETH");
+
+  const Contract = await ethers.getContractFactory("YourContract");
+  const contract = await Contract.deploy(/* constructor args */);
+  await contract.waitForDeployment();
+
+  const address = await contract.getAddress();
+  console.log("Deployed at:", address);
+  console.log("Etherscan:", `https://sepolia.etherscan.io/address/${address}`);
+}
+
+main().catch(console.error);
+```
+
+
+---
+
+## 36. Test File Template
+
+Use this as the base for all FHEVM contract tests. Runs on local Hardhat network with mock encryption.
+
+```typescript
+// test/ConfidentialVoting.test.ts
+import { expect } from "chai";
+import { ethers } from "hardhat";
+import type { HardhatEthersSigner } from "@nomicfoundation/hardhat-ethers/signers";
+
+describe("ConfidentialVoting", function () {
+  let contract: any;
+  let owner: HardhatEthersSigner;
+  let alice: HardhatEthersSigner;
+  let bob: HardhatEthersSigner;
+
+  beforeEach(async function () {
+    [owner, alice, bob] = await ethers.getSigners();
+
+    const Contract = await ethers.getContractFactory("ConfidentialVoting");
+    contract = await Contract.deploy();
+    await contract.waitForDeployment();
+  });
+
+  it("should deploy successfully", async function () {
+    expect(await contract.getAddress()).to.be.properAddress;
+  });
+
+  it("should set deployer as owner", async function () {
+    expect(await contract.owner()).to.equal(owner.address);
+  });
+
+  it("should create a proposal", async function () {
+    await contract.connect(owner).createProposal("Should we upgrade?");
+    expect(await contract.proposalCount()).to.equal(1);
+  });
+
+  it("should track who has voted", async function () {
+    await contract.connect(owner).createProposal("Test proposal");
+    // Note: on local Hardhat, encrypted inputs are mocked
+    // Test contract state logic not encryption correctness
+    expect(await contract.hasVoted(alice.address, 0)).to.be.false;
+  });
+
+  it("should reject double voting", async function () {
+    await contract.connect(owner).createProposal("Test proposal");
+    // cast vote once — use mock handle and proof for local testing
+    const mockHandle = ethers.zeroPadValue("0x01", 32);
+    const mockProof  = "0x";
+    await contract.connect(alice).castVote(0, mockHandle, mockProof);
+    // second vote should revert
+    await expect(
+      contract.connect(alice).castVote(0, mockHandle, mockProof)
+    ).to.be.revertedWith("Already voted");
+  });
+
+  it("should only allow owner to reveal results", async function () {
+    await contract.connect(owner).createProposal("Test proposal");
+    await expect(
+      contract.connect(alice).revealResults(0)
+    ).to.be.revertedWith("Not owner");
+  });
+});
+```
+
+### Run Tests
+
+```bash
+# Local mock encryption — fast
+npx hardhat test
+
+# With gas reporting
+REPORT_GAS=true npx hardhat test
+
+# Specific test file
+npx hardhat test test/ConfidentialVoting.test.ts
+```
+
+---
+
+## 37. Frontend Template (HTML + ethers.js)
+
+Complete single-file frontend for any FHEVM contract. Shows encrypt → transact → decrypt flow.
+
+```html
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>FHEVM dApp</title>
+  <script src="https://cdn.jsdelivr.net/npm/ethers@6.7.0/dist/ethers.umd.min.js"></script>
+  <style>
+    body { font-family: monospace; max-width: 600px; margin: 40px auto; padding: 20px; }
+    button { padding: 10px 20px; margin: 5px; cursor: pointer; }
+    #status { margin: 10px 0; padding: 10px; background: #f0f0f0; min-height: 40px; }
+  </style>
+</head>
+<body>
+  <h2>FHEVM dApp</h2>
+  <div id="status">Not connected</div>
+
+  <button onclick="connectWallet()">Connect Wallet</button>
+  <button onclick="encrypt()">Encrypt Input</button>
+  <button onclick="sendTx()">Send Transaction</button>
+  <button onclick="decryptBalance()">Decrypt Balance</button>
+
+  <script>
+    const CONTRACT_ADDRESS = "0x..."; // your deployed contract
+    const BACKEND_URL      = "https://your-backend.onrender.com";
+    const CONTRACT_ABI = [
+      "function deposit(bytes32 encryptedAmount, bytes inputProof) external",
+      "function getBalanceHandle(address user) external returns (bytes32)",
+      "function hasDeposit(address) external view returns (bool)",
+    ];
+
+    let provider, signer, contract;
+    let encryptedHandle, encryptedProof;
+
+    function log(msg) {
+      document.getElementById("status").innerText = msg;
+      console.log(msg);
+    }
+
+    // ─── Connect Wallet ──────────────────────────────────────────
+    async function connectWallet() {
+      if (!window.ethereum) return log("MetaMask not found");
+      provider = new ethers.BrowserProvider(window.ethereum);
+      await provider.send("eth_requestAccounts", []);
+      signer   = await provider.getSigner();
+      contract = new ethers.Contract(CONTRACT_ADDRESS, CONTRACT_ABI, signer);
+      log("Connected: " + await signer.getAddress());
+    }
+
+    // ─── Encrypt Input via Backend ───────────────────────────────
+    async function encrypt() {
+      const amount  = document.getElementById("amount")?.value || "100";
+      const address = await signer.getAddress();
+      log("Encrypting...");
+
+      // Wake backend first
+      await fetch(`${BACKEND_URL}/health`).catch(() => {});
+
+      const res  = await fetch(`${BACKEND_URL}/encrypt`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          amount,
+          contractAddress: CONTRACT_ADDRESS,
+          userAddress: address,
+        }),
+      });
+      const data = await res.json();
+      if (!data.success) return log("Encrypt failed: " + data.error);
+
+      encryptedHandle = data.handle;
+      encryptedProof  = data.inputProof;
+      log("Encrypted. Handle: " + encryptedHandle.slice(0, 18) + "...");
+    }
+
+    // ─── Send Transaction ────────────────────────────────────────
+    async function sendTx() {
+      if (!encryptedHandle) return log("Encrypt first");
+      log("Sending transaction... (FHE takes 5-30 seconds)");
+      try {
+        const tx = await contract.deposit(
+          encryptedHandle,
+          encryptedProof,
+          { gasLimit: 1_000_000n }
+        );
+        log("Tx sent: " + tx.hash);
+        await tx.wait();
+        log("Confirmed: " + tx.hash);
+      } catch (e) {
+        log("Error: " + e.message);
+      }
+    }
+
+    // ─── Decrypt Balance ─────────────────────────────────────────
+    async function decryptBalance() {
+      const address = await signer.getAddress();
+      log("Getting balance handle...");
+
+      // Get encrypted handle from contract
+      const handle = await contract.getBalanceHandle.staticCall(address);
+      log("Got handle. Preparing decrypt...");
+
+      // Step 1: Get EIP-712 from backend
+      const prepRes = await fetch(`${BACKEND_URL}/decrypt-prepare`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          handle,
+          contractAddress: CONTRACT_ADDRESS,
+          userAddress: address,
+        }),
+      });
+      const prep = await prepRes.json();
+      if (!prep.success) return log("Decrypt prepare failed: " + prep.error);
+
+      // Step 2: Sign EIP-712
+      log("Please sign the decrypt request in your wallet...");
+      const { domain, types: allTypes, message } = prep.eip712;
+      const { EIP712Domain: _, ...signTypes } = allTypes;
+      const signature = await signer.signTypedData(
+        { ...domain, chainId: Number(domain.chainId) },
+        signTypes,
+        message
+      );
+
+      // Step 3: Decrypt via backend
+      const decRes = await fetch(`${BACKEND_URL}/decrypt-balance`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          handle,
+          contractAddress: CONTRACT_ADDRESS,
+          userAddress: address,
+          signature,
+          keypair:        prep.keypair,
+          startTimestamp: prep.startTimestamp,
+          durationDays:   prep.durationDays,
+        }),
+      });
+      const dec = await decRes.json();
+      if (!dec.success) return log("Decrypt failed: " + dec.error);
+
+      const display = parseFloat(
+        ethers.formatUnits(dec.balance, 8) // cWETH = 8 decimals
+      ).toFixed(4);
+      log("Your balance: " + display + " cWETH");
+    }
+  </script>
+</body>
+</html>
+```
+
+### Key Points for AI Agents
+
+- Always wake backend with `/health` before encrypt — Render cold start takes 30-60s
+- Always set `gasLimit: 1_000_000n` explicitly — never rely on gas estimation
+- FHE transactions take 5-30 seconds — show loading state
+- `getBalanceHandle` must use `staticCall` — it modifies state but returns a value
+- `chainId` must be `Number` not BigInt for EIP-712 signing
+- Strip `0x` from signature before sending to backend
+
