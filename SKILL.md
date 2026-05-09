@@ -1972,168 +1972,281 @@ npx hardhat test test/ConfidentialVoting.test.ts
 
 ---
 
-## 37. Frontend Template (HTML + ethers.js)
+## 37. Frontend Template (React + Vite + ethers.js)
 
-Complete single-file frontend for any FHEVM contract. Shows encrypt → transact → decrypt flow.
+Use this as the base for all FHEVM dApp frontends. Built with React + Vite — the same stack as the official fhevm-react-template.
+
+### Setup
+
+```bash
+npm create vite@latest frontend -- --template react
+cd frontend
+npm install ethers
+npm install
+```
+
+### vite.config.js
+
+```javascript
+import { defineConfig } from 'vite'
+import react from '@vitejs/plugin-react'
+
+export default defineConfig({
+  plugins: [react()],
+  base: './', // required for GitHub Pages
+})
+```
+
+### src/App.jsx — Complete FHEVM dApp Template
+
+```jsx
+import { useState, useEffect } from "react";
+import { BrowserProvider, Contract, ethers } from "ethers";
+
+const CONTRACT_ADDRESS = "0x..."; // your deployed contract
+const BACKEND_URL      = "https://your-backend.onrender.com";
+const CONTRACT_ABI = [
+  "function createProposal(string calldata description) external",
+  "function castVote(uint256 proposalId, bytes32 encryptedVote, bytes calldata inputProof) external",
+  "function revealResults(uint256 proposalId) external",
+  "function getProposal(uint256 id) external view returns (string, bool, uint256, uint256)",
+  "function proposalCount() external view returns (uint256)",
+  "function hasVoted(address, uint256) external view returns (bool)",
+  "function owner() external view returns (address)",
+];
+
+export default function App() {
+  const [provider, setProvider]   = useState(null);
+  const [signer, setSigner]       = useState(null);
+  const [contract, setContract]   = useState(null);
+  const [account, setAccount]     = useState("");
+  const [status, setStatus]       = useState("");
+  const [loading, setLoading]     = useState(false);
+  const [proposals, setProposals] = useState([]);
+  const [isOwner, setIsOwner]     = useState(false);
+  const [description, setDescription] = useState("");
+
+  // Wake backend on load
+  useEffect(() => {
+    fetch(`${BACKEND_URL}/health`).catch(() => {});
+  }, []);
+
+  // ─── Connect Wallet ─────────────────────────────────────────
+  async function connectWallet() {
+    if (!window.ethereum) return setStatus("MetaMask not found");
+    try {
+      const _provider = new BrowserProvider(window.ethereum);
+      await _provider.send("eth_requestAccounts", []);
+
+      // Check network
+      const network = await _provider.getNetwork();
+      if (network.chainId !== 11155111n) {
+        await window.ethereum.request({
+          method: "wallet_switchEthereumChain",
+          params: [{ chainId: "0xaa36a7" }],
+        });
+      }
+
+      const _signer   = await _provider.getSigner();
+      const _contract = new Contract(CONTRACT_ADDRESS, CONTRACT_ABI, _signer);
+      const _account  = await _signer.getAddress();
+      const _owner    = await _contract.owner();
+
+      setProvider(_provider);
+      setSigner(_signer);
+      setContract(_contract);
+      setAccount(_account);
+      setIsOwner(_account.toLowerCase() === _owner.toLowerCase());
+      setStatus("Connected: " + _account.slice(0, 6) + "..." + _account.slice(-4));
+
+      await loadProposals(_contract);
+    } catch (e) {
+      setStatus("Error: " + e.message);
+    }
+  }
+
+  // ─── Load Proposals ─────────────────────────────────────────
+  async function loadProposals(_contract) {
+    try {
+      const count = await _contract.proposalCount();
+      const list  = [];
+      for (let i = 0; i < Number(count); i++) {
+        const [desc, revealed, yesVotes, noVotes] = await _contract.getProposal(i);
+        list.push({ id: i, desc, revealed, yesVotes: Number(yesVotes), noVotes: Number(noVotes) });
+      }
+      setProposals(list);
+    } catch (e) {
+      setStatus("Error loading proposals: " + e.message);
+    }
+  }
+
+  // ─── Create Proposal ────────────────────────────────────────
+  async function createProposal() {
+    if (!contract || !description) return;
+    setLoading(true);
+    setStatus("Creating proposal...");
+    try {
+      const tx = await contract.createProposal(description, { gasLimit: 300_000n });
+      await tx.wait();
+      setDescription("");
+      setStatus("Proposal created!");
+      await loadProposals(contract);
+    } catch (e) {
+      setStatus("Error: " + e.message);
+    }
+    setLoading(false);
+  }
+
+  // ─── Cast Vote ───────────────────────────────────────────────
+  async function castVote(proposalId, vote) {
+    if (!contract || !account) return;
+    setLoading(true);
+    setStatus("Encrypting vote... (5-30 seconds)");
+    try {
+      // Encrypt vote via backend (1 = yes, 0 = no)
+      const res = await fetch(`${BACKEND_URL}/encrypt`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          amount: vote ? "1" : "0",
+          contractAddress: CONTRACT_ADDRESS,
+          userAddress: account,
+        }),
+      });
+      const { handle, inputProof, success, error } = await res.json();
+      if (!success) throw new Error(error);
+
+      setStatus("Sending encrypted vote...");
+      const tx = await contract.castVote(proposalId, handle, inputProof, { gasLimit: 1_000_000n });
+      setStatus("Vote sent! Waiting for confirmation...");
+      await tx.wait();
+      setStatus("Vote cast successfully!");
+      await loadProposals(contract);
+    } catch (e) {
+      setStatus("Error: " + e.message);
+    }
+    setLoading(false);
+  }
+
+  // ─── Reveal Results ──────────────────────────────────────────
+  async function revealResults(proposalId) {
+    if (!contract) return;
+    setLoading(true);
+    setStatus("Revealing results...");
+    try {
+      const tx = await contract.revealResults(proposalId, { gasLimit: 1_000_000n });
+      await tx.wait();
+      setStatus("Results revealed!");
+      await loadProposals(contract);
+    } catch (e) {
+      setStatus("Error: " + e.message);
+    }
+    setLoading(false);
+  }
+
+  return (
+    <div style={{ maxWidth: 600, margin: "40px auto", padding: 20, fontFamily: "monospace" }}>
+      <h1>🔒 Confidential Voting</h1>
+      <p>Powered by Zama FHEVM — votes are encrypted onchain</p>
+
+      {!account ? (
+        <button onClick={connectWallet}>Connect Wallet</button>
+      ) : (
+        <p>✅ {account.slice(0,6)}...{account.slice(-4)} {isOwner && "(Owner)"}</p>
+      )}
+
+      <div style={{ background: "#f0f0f0", padding: 10, margin: "10px 0", minHeight: 40 }}>
+        {status || "Ready"}
+      </div>
+
+      {loading && <p>⏳ FHE operations take 5-30 seconds on Sepolia...</p>}
+
+      {isOwner && (
+        <div>
+          <h3>Create Proposal</h3>
+          <input
+            value={description}
+            onChange={e => setDescription(e.target.value)}
+            placeholder="Proposal description"
+            style={{ width: "70%", padding: 8 }}
+          />
+          <button onClick={createProposal} disabled={loading}>Create</button>
+        </div>
+      )}
+
+      <h3>Proposals</h3>
+      {proposals.length === 0 && <p>No proposals yet.</p>}
+      {proposals.map(p => (
+        <div key={p.id} style={{ border: "1px solid #ccc", padding: 10, margin: "10px 0" }}>
+          <strong>#{p.id}: {p.desc}</strong>
+          {p.revealed ? (
+            <p>✅ Yes: {p.yesVotes} | ❌ No: {p.noVotes}</p>
+          ) : (
+            <p>🔒 Votes encrypted — results hidden</p>
+          )}
+          {account && !p.revealed && (
+            <div>
+              <button onClick={() => castVote(p.id, true)} disabled={loading}>Vote Yes</button>
+              <button onClick={() => castVote(p.id, false)} disabled={loading}>Vote No</button>
+            </div>
+          )}
+          {isOwner && !p.revealed && (
+            <button onClick={() => revealResults(p.id)} disabled={loading}>Reveal Results</button>
+          )}
+        </div>
+      ))}
+
+      <button onClick={() => loadProposals(contract)} disabled={!contract}>Refresh</button>
+    </div>
+  );
+}
+```
+
+### src/main.jsx
+
+```jsx
+import { StrictMode } from 'react'
+import { createRoot } from 'react-dom/client'
+import App from './App.jsx'
+
+createRoot(document.getElementById('root')).render(
+  <StrictMode>
+    <App />
+  </StrictMode>,
+)
+```
+
+### index.html
 
 ```html
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
-<head>
-  <meta charset="UTF-8">
-  <title>FHEVM dApp</title>
-  <script src="https://cdn.jsdelivr.net/npm/ethers@6.7.0/dist/ethers.umd.min.js"></script>
-  <style>
-    body { font-family: monospace; max-width: 600px; margin: 40px auto; padding: 20px; }
-    button { padding: 10px 20px; margin: 5px; cursor: pointer; }
-    #status { margin: 10px 0; padding: 10px; background: #f0f0f0; min-height: 40px; }
-  </style>
-</head>
-<body>
-  <h2>FHEVM dApp</h2>
-  <div id="status">Not connected</div>
-
-  <button onclick="connectWallet()">Connect Wallet</button>
-  <button onclick="encrypt()">Encrypt Input</button>
-  <button onclick="sendTx()">Send Transaction</button>
-  <button onclick="decryptBalance()">Decrypt Balance</button>
-
-  <script>
-    const CONTRACT_ADDRESS = "0x..."; // your deployed contract
-    const BACKEND_URL      = "https://your-backend.onrender.com";
-    const CONTRACT_ABI = [
-      "function deposit(bytes32 encryptedAmount, bytes inputProof) external",
-      "function getBalanceHandle(address user) external returns (bytes32)",
-      "function hasDeposit(address) external view returns (bool)",
-    ];
-
-    let provider, signer, contract;
-    let encryptedHandle, encryptedProof;
-
-    function log(msg) {
-      document.getElementById("status").innerText = msg;
-      console.log(msg);
-    }
-
-    // ─── Connect Wallet ──────────────────────────────────────────
-    async function connectWallet() {
-      if (!window.ethereum) return log("MetaMask not found");
-      provider = new ethers.BrowserProvider(window.ethereum);
-      await provider.send("eth_requestAccounts", []);
-      signer   = await provider.getSigner();
-      contract = new ethers.Contract(CONTRACT_ADDRESS, CONTRACT_ABI, signer);
-      log("Connected: " + await signer.getAddress());
-    }
-
-    // ─── Encrypt Input via Backend ───────────────────────────────
-    async function encrypt() {
-      const amount  = document.getElementById("amount")?.value || "100";
-      const address = await signer.getAddress();
-      log("Encrypting...");
-
-      // Wake backend first
-      await fetch(`${BACKEND_URL}/health`).catch(() => {});
-
-      const res  = await fetch(`${BACKEND_URL}/encrypt`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          amount,
-          contractAddress: CONTRACT_ADDRESS,
-          userAddress: address,
-        }),
-      });
-      const data = await res.json();
-      if (!data.success) return log("Encrypt failed: " + data.error);
-
-      encryptedHandle = data.handle;
-      encryptedProof  = data.inputProof;
-      log("Encrypted. Handle: " + encryptedHandle.slice(0, 18) + "...");
-    }
-
-    // ─── Send Transaction ────────────────────────────────────────
-    async function sendTx() {
-      if (!encryptedHandle) return log("Encrypt first");
-      log("Sending transaction... (FHE takes 5-30 seconds)");
-      try {
-        const tx = await contract.deposit(
-          encryptedHandle,
-          encryptedProof,
-          { gasLimit: 1_000_000n }
-        );
-        log("Tx sent: " + tx.hash);
-        await tx.wait();
-        log("Confirmed: " + tx.hash);
-      } catch (e) {
-        log("Error: " + e.message);
-      }
-    }
-
-    // ─── Decrypt Balance ─────────────────────────────────────────
-    async function decryptBalance() {
-      const address = await signer.getAddress();
-      log("Getting balance handle...");
-
-      // Get encrypted handle from contract
-      const handle = await contract.getBalanceHandle.staticCall(address);
-      log("Got handle. Preparing decrypt...");
-
-      // Step 1: Get EIP-712 from backend
-      const prepRes = await fetch(`${BACKEND_URL}/decrypt-prepare`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          handle,
-          contractAddress: CONTRACT_ADDRESS,
-          userAddress: address,
-        }),
-      });
-      const prep = await prepRes.json();
-      if (!prep.success) return log("Decrypt prepare failed: " + prep.error);
-
-      // Step 2: Sign EIP-712
-      log("Please sign the decrypt request in your wallet...");
-      const { domain, types: allTypes, message } = prep.eip712;
-      const { EIP712Domain: _, ...signTypes } = allTypes;
-      const signature = await signer.signTypedData(
-        { ...domain, chainId: Number(domain.chainId) },
-        signTypes,
-        message
-      );
-
-      // Step 3: Decrypt via backend
-      const decRes = await fetch(`${BACKEND_URL}/decrypt-balance`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          handle,
-          contractAddress: CONTRACT_ADDRESS,
-          userAddress: address,
-          signature,
-          keypair:        prep.keypair,
-          startTimestamp: prep.startTimestamp,
-          durationDays:   prep.durationDays,
-        }),
-      });
-      const dec = await decRes.json();
-      if (!dec.success) return log("Decrypt failed: " + dec.error);
-
-      const display = parseFloat(
-        ethers.formatUnits(dec.balance, 8) // cWETH = 8 decimals
-      ).toFixed(4);
-      log("Your balance: " + display + " cWETH");
-    }
-  </script>
-</body>
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Confidential Voting — FHEVM</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.jsx"></script>
+  </body>
 </html>
+```
+
+### Build and Deploy
+
+```bash
+cd frontend
+npm run build
+# dist/ folder is ready for GitHub Pages
 ```
 
 ### Key Points for AI Agents
 
+- Always set `base: './'` in `vite.config.js` for GitHub Pages
 - Always wake backend with `/health` before encrypt — Render cold start takes 30-60s
-- Always set `gasLimit: 1_000_000n` explicitly — never rely on gas estimation
+- Always set explicit `gasLimit` — never rely on estimation
 - FHE transactions take 5-30 seconds — show loading state
-- `getBalanceHandle` must use `staticCall` — it modifies state but returns a value
-- `chainId` must be `Number` not BigInt for EIP-712 signing
-- Strip `0x` from signature before sending to backend
+- Check network is Sepolia (chainId 11155111) before any transaction
+- `CONTRACT_ADDRESS` and `BACKEND_URL` must be updated after deployment
 
