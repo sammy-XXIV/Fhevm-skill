@@ -31,7 +31,7 @@ Zama FHEVM allows Solidity contracts to compute directly on encrypted data. User
 ```
 User Browser → encrypt(amount) → ciphertext handle
                                         ↓
-                              VeilLending Contract
+                              Confidential Contract
                                         ↓
                          FHE coprocessor computes on ciphertext
                                         ↓
@@ -1139,8 +1139,8 @@ ebytes1, ebytes4, ebytes8, ebytes16, ebytes32, ebytes64, ebytes128, ebytes256
 
 ---
 
-*Built from production experience deploying VEIL Finance on Zama FHEVM Sepolia testnet.*
-*Every anti-pattern here caused a real bug in production.*
+*Built from real production bugs on Zama FHEVM Sepolia testnet.*
+*Every anti-pattern here caused a real failure in production.*
 
 ---
 
@@ -1482,4 +1482,269 @@ export default config;
   }
 }
 ```
+
+
+---
+
+## 31. React dApp Template Setup
+
+The official Zama React template is the recommended starting point for full-stack FHEVM dApps.
+
+### Clone and Setup
+
+```bash
+git clone https://github.com/zama-ai/fhevm-react-template
+cd fhevm-react-template
+
+# Initialize submodules — includes fhevm-hardhat-template
+git submodule update --init --recursive
+
+# Install dependencies (uses pnpm)
+pnpm install
+```
+
+### Monorepo Structure
+
+```
+fhevm-react-template/
+├── packages/
+│   ├── fhevm-hardhat-template/  # Smart contracts + deployment
+│   ├── fhevm-sdk/               # FHEVM SDK package
+│   └── nextjs/                  # React frontend (Next.js + RainbowKit + Tailwind)
+└── scripts/                     # Build and deployment scripts
+```
+
+### Environment Variables
+
+```bash
+MNEMONIC=your_wallet_mnemonic
+INFURA_API_KEY=your_infura_key
+```
+
+### Dev Commands
+
+```bash
+# Terminal 1 — start local Hardhat node
+pnpm chain
+
+# Terminal 2 — deploy contracts
+pnpm deploy:localhost
+
+# Terminal 3 — start frontend
+pnpm start
+
+# For Sepolia
+pnpm deploy:sepolia
+```
+
+### SDK Packages — Which One to Use
+
+There are three related but distinct packages:
+
+| Package | Use case |
+|---------|----------|
+| `@zama-fhe/relayer-sdk` | Node.js backend — user decryption, encrypt for scripts |
+| `@fhevm/sdk` | React/browser frontend dApps |
+| `fhevmjs` | Old GitHub repo name — now published as `@zama-fhe/relayer-sdk` |
+
+**For React frontend (fhevmjs / @fhevm/sdk):**
+
+```bash
+npm install @fhevm/sdk
+```
+
+```typescript
+import { createInstance } from '@fhevm/sdk';
+import { BrowserProvider } from 'ethers';
+
+const provider = new BrowserProvider(window.ethereum);
+const instance = await createInstance({ provider });
+
+// Encrypt value
+const encrypted = await instance
+  .createEncryptedInput(contractAddress, userAddress)
+  .add64(BigInt(amount))
+  .encrypt();
+
+const handle     = encrypted.handles[0];
+const inputProof = encrypted.inputProof;
+```
+
+**For Node.js backend (relayer-sdk):**
+
+```bash
+npm install @zama-fhe/relayer-sdk
+```
+
+```javascript
+const { createInstance, SepoliaConfig } = require('@zama-fhe/relayer-sdk/node');
+const instance = await createInstance({
+  ...SepoliaConfig,
+  network: 'https://ethereum-sepolia-rpc.publicnode.com',
+});
+```
+
+---
+
+## 32. OpenZeppelin Confidential Contracts
+
+The official audited library for FHEVM contracts. Use instead of writing from scratch.
+
+### Install
+
+```bash
+npm install @openzeppelin/confidential-contracts
+```
+
+### ERC7984 — Confidential Token Base Contract
+
+Build your own confidential token by extending `ERC7984`:
+
+```solidity
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.27;
+
+import { ERC7984 } from "@openzeppelin/confidential-contracts/token/ERC7984/ERC7984.sol";
+import { ZamaEthereumConfig } from "@fhevm/solidity/config/ZamaConfig.sol";
+
+contract MyConfidentialToken is ERC7984, ZamaEthereumConfig {
+    constructor()
+        ERC7984("MyToken", "MTK", "https://my-contract-uri.com")
+    {}
+
+    function mint(address to, uint64 amount) external {
+        _mint(to, amount);
+    }
+}
+```
+
+### Available Contracts
+
+```
+@openzeppelin/confidential-contracts/
+├── token/
+│   └── ERC7984/
+│       ├── ERC7984.sol              # Base confidential token
+│       ├── extensions/
+│       │   ├── ERC7984Burnable.sol  # Add burn functionality
+│       │   ├── ERC7984Mintable.sol  # Add mint functionality
+│       │   └── ERC7984Wrapper.sol   # Wrap ERC20 → ERC7984
+├── governance/
+│   └── ConfidentialVoting.sol       # Private voting
+├── finance/
+│   └── ConfidentialVesting.sol      # Private vesting schedule
+└── utils/
+    └── EncryptedErrors.sol          # Error handling for FHE
+```
+
+### ERC7984Wrapper — Wrap ERC20 to Confidential Token
+
+```solidity
+import { ERC7984Wrapper } from "@openzeppelin/confidential-contracts/token/ERC7984/extensions/ERC7984Wrapper.sol";
+import { IERC20 } from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+
+contract WrappedUSDC is ERC7984Wrapper, ZamaEthereumConfig {
+    constructor(IERC20 underlying)
+        ERC7984("Confidential USDC", "cUSDC", "")
+        ERC7984Wrapper(underlying)
+    {}
+}
+```
+
+**Wrap flow (ERC20 → ERC7984):**
+```javascript
+// 1. Approve underlying ERC20
+await usdc.approve(wrappedUSDC.address, amount);
+
+// 2. Wrap to get confidential token
+await wrappedUSDC.wrap(userAddress, amount);
+
+// 3. Now balance is encrypted — use setOperator + confidentialTransferFrom
+```
+
+---
+
+## 33. Public Decryption Pattern
+
+Different from user decryption. Used when the contract owner or a trusted party needs to decrypt a value publicly — not tied to a specific user's wallet signature.
+
+### When to Use
+
+- Admin needs to read an encrypted total for reporting
+- Contract needs to reveal a result after a deadline (e.g. auction winner)
+- Verifiable public output after computation completes
+
+### Pattern
+
+```solidity
+// Contract requests public decryption
+// The gateway decrypts and calls back a function on your contract
+
+import { IGateway } from "@fhevm/solidity/lib/FHE.sol";
+
+contract MyContract is ZamaEthereumConfig {
+    uint64 public revealedValue;
+    euint64 private _secret;
+
+    // Step 1: Request public decryption
+    function requestReveal() external {
+        uint256[] memory handles = new uint256[](1);
+        handles[0] = Gateway.toUint256(_secret);
+        Gateway.requestDecryption(
+            handles,
+            this.callbackReveal.selector,
+            0,           // msg.value for gateway fee
+            block.timestamp + 100,  // deadline
+            false        // not trustless
+        );
+    }
+
+    // Step 2: Gateway calls this back with plaintext
+    function callbackReveal(
+        uint256 /*requestID*/,
+        uint64 decryptedValue
+    ) external onlyGateway {
+        revealedValue = decryptedValue;
+    }
+}
+```
+
+### Key Differences vs User Decryption
+
+| | User Decryption | Public Decryption |
+|--|----------------|-------------------|
+| Who decrypts | Individual user via EIP-712 | Gateway callback to contract |
+| Result | Returned to user only | Stored publicly onchain |
+| Use case | Show user their own balance | Reveal auction result, admin read |
+| Flow | Frontend signs → backend decrypts | Contract requests → gateway calls back |
+
+---
+
+## 34. Confidential Token Registry (Sepolia)
+
+Official testnet tokens from the Zama Protocol token registry:
+
+| Token | Symbol | Address | Decimals | Underlying |
+|-------|--------|---------|----------|------------|
+| Confidential WETH | cWETH | `0x46208622DA27d91db4f0393733C8BA082ed83158` | 8 | WETH |
+| Confidential USDC | cUSDC | Check registry | 6 | USDC |
+
+**Always verify current addresses at:** `https://docs.zama.ai/protocol`
+
+### Getting Testnet cWETH
+
+```javascript
+const WETH  = "0xff54739b16576FA5402F211D0b938469Ab9A5f3F";
+const CWETH = "0x46208622DA27d91db4f0393733C8BA082ed83158";
+
+// 1. Mint WETH
+await weth.mint(userAddress, ethers.parseUnits("1", 18));
+
+// 2. Approve
+await weth.approve(CWETH, ethers.parseUnits("1", 18));
+
+// 3. Wrap to cWETH (8 decimals)
+await cweth.wrap(userAddress, ethers.parseUnits("1", 18));
+```
+
 
