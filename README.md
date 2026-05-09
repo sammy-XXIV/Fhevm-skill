@@ -3,7 +3,7 @@
 A production-ready skill that teaches any AI coding agent how to write, test, and deploy confidential smart contracts on Zama FHEVM — correctly, first try.
 
 **Submission for:** Zama Developer Program Mainnet Season 2 — Bounty Track  
-**Built from:** Real production bugs discovered while building [VEIL Finance](https://sammy-xxiv.github.io/veil-finance) — a confidential lending protocol deployed on Sepolia.
+**Built from:** Real production bugs discovered while building a confidential lending protocol on Zama FHEVM Sepolia.
 
 ---
 
@@ -99,7 +99,4 @@ Exit code 1 if errors found — integrates with CI.
 
 ## Built from production
 
-VEIL Finance — confidential lending protocol on Zama FHEVM Sepolia:
-- Contract: `0x8B694DD1B76B39c30CE5106a4752dD2729482bEB`
-- Frontend: [sammy-xxiv.github.io/veil-finance](https://sammy-xxiv.github.io/veil-finance)
-- Every anti-pattern in this skill caused a real bug during VEIL development
+Every anti-pattern in this skill caused a real bug during development of a confidential lending protocol on Zama FHEVM Sepolia. This is not a docs summary — it is a record of what actually breaks in production.
