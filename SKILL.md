@@ -2250,3 +2250,73 @@ npm run build
 - Check network is Sepolia (chainId 11155111) before any transaction
 - `CONTRACT_ADDRESS` and `BACKEND_URL` must be updated after deployment
 
+
+---
+
+## 38. Relayer URL Changes and Fallback Pattern
+
+The Zama relayer URL has changed over time. Always use a fallback pattern in production.
+
+### URL History
+
+| URL | Status |
+|-----|--------|
+| `https://relayer.testnet.zama.cloud` | ❌ DNS dead — ENOTFOUND |
+| `https://relayer.testnet.zama.ai` | ✅ Current correct URL |
+
+### Correct createInstance Config for Browser (Sepolia)
+
+```javascript
+import { createInstance } from '@zama-fhe/relayer-sdk/web';
+
+async function getFhevmInstance() {
+  const config = {
+    aclContractAddress: "0x687820221192C5B662b25367F70076A37bc79b6c",
+    kmsContractAddress: "0x1364cBBf2cDF5032C47d8226a6f6FBD2AFCDacAC",
+    inputVerifierContractAddress: "0xbc91f3daD1A5F19F8390c400196e58073B6a0BC4",
+    verifyingContractAddressDecryption: "0xb6E160B1ff80D67Bfe90A85eE06Ce0A2613607D1",
+    verifyingContractAddressInputVerification: "0x7048C39f048125eDa9d678AEbaDfB22F7900a29F",
+    chainId: 11155111,
+    gatewayChainId: 55815,
+    network: "https://ethereum-sepolia-rpc.publicnode.com",
+  };
+
+  // Fallback pattern — try both URLs
+  const relayerUrls = [
+    "https://relayer.testnet.zama.ai",    // current
+    "https://relayer.testnet.zama.cloud", // old fallback
+  ];
+
+  for (const relayerUrl of relayerUrls) {
+    try {
+      const instance = await createInstance({ ...config, relayerUrl });
+      console.log("Connected to relayer:", relayerUrl);
+      return instance;
+    } catch (e) {
+      console.warn("Relayer failed:", relayerUrl, e.message);
+    }
+  }
+  throw new Error("All relayer URLs failed. Try again later.");
+}
+```
+
+### Do NOT Use SepoliaConfig Directly in Browser
+
+`SepoliaConfig` hardcodes `relayer.testnet.zama.cloud` which is dead. Always use explicit config with the fallback pattern above.
+
+```javascript
+// WRONG — SepoliaConfig points to dead URL
+const instance = await createInstance({ ...SepoliaConfig, network: window.ethereum });
+
+// CORRECT — explicit config with fallback
+const instance = await getFhevmInstance();
+```
+
+### Error Symptoms of Wrong Relayer URL
+
+- `Impossible to fetch public key: wrong relayer url`
+- `Cannot read properties of undefined (reading '_wbindgen_malloc')`
+- `DNS ENOTFOUND relayer.testnet.zama.cloud`
+
+All three mean the same thing — relayer URL is wrong or dead.
+
